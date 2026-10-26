@@ -1,3 +1,6 @@
+import { buildAiDirectProviderRequest, extractAiDirectStreamDelta } from "@edgeever/shared/ai-generation";
+import { consumeProviderEventStream } from "@edgeever/shared/provider-event-stream";
+import { normalizeVideoOutline, parseVideoOutlineModelText } from "@edgeever/shared/video-outline";
 import { normalizeInstanceUrl } from "../extension";
 import { chunkTranscript, formatTimestamp, sectionsFromOutline } from "./transcript";
 import type {
@@ -192,7 +195,7 @@ export const postVideoOutline = async (
 ): Promise<OutlineAttempt> => {
   if (!body.blocks.length) return { ok: false, reason: "failed" };
   try {
-    const response = await fetch(`${normalizeInstanceUrl(settings.instanceUrl)}/api/v1/ai/video-outline`, {
+    const response = await fetch(`${normalizeInstanceUrl(settings.instanceUrl)}/api/v1/ai/video-outline/prepare`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${settings.token}`,
@@ -203,7 +206,21 @@ export const postVideoOutline = async (
     });
     const payload = await response.json().catch(() => null) as { error?: { code?: string }; tldr?: unknown } | null;
     if (response.ok) {
-      const outline = outlineFromJson(payload);
+      const prepared = payload as unknown as import("@edgeever/shared/ai-generation").AiPreparedGeneration;
+      const modelUrl = new URL(prepared.baseUrl);
+      if (!["http:", "https:"].includes(modelUrl.protocol)) return { ok: false, reason: "failed" };
+      const origin = `${modelUrl.protocol}//${modelUrl.hostname}/*`;
+      if (typeof chrome !== "undefined" && chrome.permissions && !await chrome.permissions.contains({ origins: [origin] })) {
+        await chrome.tabs.create({ url: chrome.runtime.getURL("options.html") + `?modelOrigin=${encodeURIComponent(origin)}` });
+        return { ok: false, reason: "forbidden" };
+      }
+      const request = buildAiDirectProviderRequest(prepared);
+      const result = await fetch(request.url, { method: "POST", headers: request.headers, body: request.body,
+        credentials: "omit", redirect: "error", signal: AbortSignal.timeout(45_000) });
+      if (!result.ok || !result.body) return { ok: false, reason: "failed" };
+      let text = "";
+      await consumeProviderEventStream(result.body, value => { text += extractAiDirectStreamDelta(prepared.provider, value).text; });
+      const outline = outlineFromJson(normalizeVideoOutline(parseVideoOutlineModelText(text), { ...body, author: body.author ?? "" }));
       return outline ? { ok: true, outline } : { ok: false, reason: "invalid" };
     }
     const code = payload?.error?.code ?? "";
@@ -230,7 +247,12 @@ export const persistVideoNote = async (input: {
   labels: VideoNoteLabels;
   capturedOn: string;
   attempt: OutlineAttempt | null;
-  createMemo: (body: { notebookId: string; title: string; contentMarkdown: string; tags: string[] }) => Promise<unknown>;
+  createMemo: (body: {
+    notebookId: string;
+    title: string;
+    contentMarkdown: string;
+    tags: string[];
+  }) => Promise<unknown>;
   createWithImage?: (body: {
     notebookId: string;
     title: string;
@@ -242,6 +264,12 @@ export const persistVideoNote = async (input: {
   }) => Promise<unknown>;
 }) => {
   const withCover = Boolean(input.capture.thumbnail && input.createWithImage);
+  const noteFields = (title: string, contentMarkdown: string) => ({
+    notebookId: input.notebookId,
+    title,
+    contentMarkdown,
+    tags: ["web-clip"] as string[],
+  });
   const note = videoNoteFromCapture({
     capture: input.capture,
     attempt: input.attempt,
@@ -252,10 +280,7 @@ export const persistVideoNote = async (input: {
   if (withCover && input.capture.thumbnail && input.createWithImage) {
     try {
       await input.createWithImage({
-        notebookId: input.notebookId,
-        title: note.title,
-        contentMarkdown: note.markdown,
-        tags: ["web-clip"],
+        ...noteFields(note.title, note.markdown),
         filename: filenameForCover(input.capture.thumbnail.mimeType),
         mimeType: input.capture.thumbnail.mimeType,
         bytes: input.capture.thumbnail.bytes,
@@ -274,11 +299,6 @@ export const persistVideoNote = async (input: {
       cover: "none",
     })
     : note;
-  await input.createMemo({
-    notebookId: input.notebookId,
-    title: plainNote.title,
-    contentMarkdown: plainNote.markdown,
-    tags: ["web-clip"],
-  });
+  await input.createMemo(noteFields(plainNote.title, plainNote.markdown));
   return plainNote;
 };

@@ -24,8 +24,7 @@ const PUBLISH_MONO = "'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regula
 const BODY_COLOR = "#27272a";
 const QUOTE_COLOR = "#3d4450";
 const CODE_COLOR = "#3d4450";
-const CODE_BACKGROUND = "#f3f5f7";
-const CODE_BORDER = "#e1e5ea";
+const CODE_BACKGROUND = "#e9edf1";
 const LINK_COLOR = "#404040";
 const CHECKED_TASK_COLOR = "#737373";
 
@@ -58,11 +57,16 @@ const applyLegacyWeChatStyles = (
   const fontSize = `${metrics.fontSize}px`;
   const lineHeight = String(metrics.lineHeight);
   const codeSize = `${noteProseCodeFontSize(metrics.fontSize)}px`;
-  // A named hue only recolors links, inline code, and bold, matching the editor.
+  // A named hue recolors links, inline code, and bold, matching the editor.
   const link = colors?.link ?? LINK_COLOR;
   const inlineCodeColor = colors?.codeText ?? CODE_COLOR;
+  const inlineCodeBackground = colors?.codeBackground ?? CODE_BACKGROUND;
+  const inlineCodeShadow = colors
+    ? "box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06);"
+    : "box-shadow: inset 0 0 0 1px rgba(61,68,80,0.08);";
   const accent = colors?.accent ?? BODY_COLOR;
   const bold = colors ? `font-weight: 800; color: ${accent};` : "font-weight: 800;";
+  const thBackground = colors ? colors.surface : "#f5f5f5";
   const textStyle = `font-family: ${PUBLISH_FONT}; font-size: ${fontSize}; line-height: ${lineHeight}; letter-spacing: -0.005em; color: ${BODY_COLOR};`;
   const styles: Record<string, string> = {
     p: `margin: 0 0 ${PARAGRAPH_SPACING}; padding: 0; ${textStyle}`,
@@ -81,16 +85,17 @@ const applyLegacyWeChatStyles = (
     b: bold,
     em: "font-style: italic;",
     del: "text-decoration: line-through;",
-    code: `padding: 2px 6px; border: 1px solid ${CODE_BORDER}; border-radius: 4px; background: ${CODE_BACKGROUND}; color: ${inlineCodeColor}; font-family: ${PUBLISH_MONO}; font-size: ${codeSize}; font-weight: 550;`,
+    code: `padding: 1px 4px; border: 0; border-radius: 4px; background: ${inlineCodeBackground}; ${inlineCodeShadow} color: ${inlineCodeColor}; font-family: ${PUBLISH_MONO}; font-size: ${codeSize}; font-weight: 400;`,
     pre: `margin: 0 0 16px; padding: 14px 16px; overflow: hidden; border: 1px solid #e4e4e4; border-radius: 8px; background: #fafafa; color: #0f172a; font-family: ${PUBLISH_MONO}; font-size: ${codeSize}; line-height: 1.6; text-align: left; white-space: pre-wrap;`,
     hr: "margin: 24px 0; border: 0; border-top: 1px solid #1a1d21;",
     table: `width: 100%; margin: 20px 0; border-collapse: collapse; font-size: ${fontSize}; line-height: 1.45;`,
-    th: "padding: 8px 13px; border: 1px solid #e5e5e5; background: #f5f5f5; color: #0f172a; font-weight: 600; font-size: 13px; text-align: left;",
+    th: `padding: 8px 13px; border: 1px solid #e5e5e5; background: ${thBackground}; color: #0f172a; font-weight: 600; font-size: 13px; text-align: left;`,
     td: `padding: 8px 13px; border: 1px solid #e5e5e5; color: ${BODY_COLOR}; text-align: left;`,
     img: "display: block; max-width: 100%; height: auto; margin: 16px 0; border: 1px solid #b8dfd0; border-radius: 8px;",
   };
 
   root.style.cssText = `${textStyle} background-color: #ffffff; word-break: break-word;`;
+  root.querySelectorAll("[data-edgeever-video-note]").forEach((element) => element.remove());
 
   root.querySelectorAll<HTMLElement>("*").forEach((element) => {
     if (element.closest("[data-ee-math]")) return;
@@ -111,6 +116,18 @@ const applyLegacyWeChatStyles = (
   root.querySelectorAll<HTMLElement>("pre code").forEach((element) => {
     element.style.cssText = `padding: 0; border: 0; background: transparent; color: inherit; font-family: ${PUBLISH_MONO}; font-size: ${codeSize}; font-weight: 400; white-space: pre-wrap;`;
   });
+
+  if (colors) {
+    root.querySelectorAll<HTMLElement>("table").forEach((table) => {
+      table.querySelectorAll<HTMLElement>("tbody tr").forEach((tr, index) => {
+        if (index % 2 === 1) {
+          tr.querySelectorAll<HTMLElement>("td").forEach((td) => {
+            td.style.backgroundColor = colors.surface;
+          });
+        }
+      });
+    });
+  }
 };
 
 const applyInlineStyles = (
@@ -1048,7 +1065,9 @@ export const readEditorCopyContext = (from?: HTMLElement | null) => {
   const palette = container?.dataset.notePalette;
   let colors: NoteProsePaletteColors | null = null;
   if (style && palette && palette !== "native") {
-    const accent = readPaletteColor(style, "--note-palette-accent");
+    // Publishing uses a light surface even when the editor is in dark mode.
+    const accent = readPaletteColor(style, "--note-palette-light-accent")
+      || readPaletteColor(style, "--note-palette-accent");
     const text = readPaletteColor(style, "--note-palette-text");
     if (accent && text) {
       colors = {

@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { parseHTML } from "../../../../node_modules/.bun/linkedom@0.18.13/node_modules/linkedom/esm/index.js";
+import { parseHTML } from "linkedom";
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, "window");
 const originalDocument = Object.getOwnPropertyDescriptor(globalThis, "document");
@@ -38,11 +38,13 @@ const css = (element) => (element?.style.cssText ?? "").replace(/:\s+/g, ":");
 
 let preparePublishArticle;
 let prepareMarkdownPublishArticle;
+let readEditorCopyContext;
 
 beforeAll(async () => {
   const module = await import("./wechat-copy.ts");
   preparePublishArticle = module.preparePublishArticle;
   prepareMarkdownPublishArticle = module.prepareMarkdownPublishArticle;
+  readEditorCopyContext = module.readEditorCopyContext;
 });
 
 const MARKDOWN = `
@@ -56,7 +58,7 @@ const MARKDOWN = `
 - **行内公式**：例如质能方程 $E = mc^2$。
 - **多行独立公式块**：
 $$
-\oint_{\\partial \\Omega} \\mathbf{E} \\cdot d\\mathbf{S} = \\frac{1}{\\varepsilon_0} \\iiint_{\\Omega} \\rho \\, dV
+\\oint_{\\partial \\Omega} \\mathbf{E} \\cdot d\\mathbf{S} = \\frac{1}{\\varepsilon_0} \\iiint_{\\Omega} \\rho \\, dV
 $$
 
 - [x] 已完成的待办
@@ -69,6 +71,45 @@ curl -fsSL https://edgeever.org/install.sh | bash
 `;
 
 describe("preparePublishArticle", () => {
+  test("exports a light reading accent from a dark editor", () => {
+    const container = document.createElement("div");
+    container.dataset.notePalette = "violet";
+    const previous = globalThis.getComputedStyle;
+    globalThis.getComputedStyle = () => ({
+      getPropertyValue: (name) => ({
+        "--note-palette-accent": "#B39AE8",
+        "--note-palette-light-accent": "#7351CF",
+        "--note-palette-text": "#3F3F46",
+        "--note-palette-surface": "#F4F4F5",
+        "--note-palette-divider": "#E1DEFF",
+        "--note-palette-code-bg": "#F3F1FF",
+        "--note-palette-code-text": "#5B4EE0",
+      })[name] ?? "",
+    });
+    try {
+      const context = readEditorCopyContext(container);
+      expect(context.colors.accent).toBe("#7351CF");
+      expect(context.colors.codeText).toBe("#5B4EE0");
+      expect(context.colors.codeBackground).toBe("#F3F1FF");
+      expect(context.colors.surface).toBe("#F4F4F5");
+      expect(context.colors.divider).toBe("#E1DEFF");
+      const root = preparePublishArticle([
+        "<p><strong>重点</strong> <code>Cmd/Ctrl + E</code></p>",
+        "<table><thead><tr><th>表头</th></tr></thead><tbody><tr><td>第1行</td></tr><tr><td>第2行</td></tr></tbody></table>",
+      ].join(""), container);
+      expect(css(root.querySelector("strong"))).toContain("color:#7351CF");
+      expect(css(root.querySelector("code"))).toContain("color:#5B4EE0");
+      expect(css(root.querySelector("code"))).toContain("background:#F3F1FF");
+      const th = root.querySelector("th");
+      expect(css(th)).toContain("background:#F4F4F5");
+      expect(css(th)).toContain("border:1px solid #e5e5e5");
+      const rows = root.querySelectorAll("tbody tr");
+      expect(css(rows[1].querySelector("td"))).toContain("background-color:#F4F4F5");
+    } finally {
+      globalThis.getComputedStyle = previous;
+    }
+  });
+
   test("matches the light editor instead of the old rose-and-green paste", () => {
     const root = preparePublishArticle([
       "<blockquote><p>引用</p></blockquote>",
@@ -94,7 +135,7 @@ describe("preparePublishArticle", () => {
     expect(css(root.querySelector("strong"))).toContain("font-weight:800");
     const inlineCode = body.querySelector("code");
     expect(css(inlineCode)).toContain("color:#3d4450");
-    expect(css(inlineCode)).toContain("background:#f3f5f7");
+    expect(css(inlineCode)).toContain("background:#e9edf1");
     expect(css(root.querySelector("h2"))).toContain("font-weight:600");
     expect(css(root.querySelector("h2"))).toContain("color:#27272a");
     const [rule, merge] = root.querySelectorAll("hr");

@@ -5,14 +5,14 @@ import { Hono } from "hono";
 import { createSelfHostedStorageAdapter } from "./self-hosted-storage-adapter.ts";
 import { registerCompanionRoutes } from "./companion-routes.ts";
 import { beginCompanionTurn, checkpointCompanionTurn, clearCompanionHistory, saveCompanionMemory } from "./companion-service.ts";
-import { createDefaultTableDocument, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeTableDocument } from "@edgeever/shared";
+import { createPosterDocument, serializePosterDocument, parsePosterDocument, createDefaultTableDocument, parseDiagramDocument, parseInfographicDocument, parseTableDocument, serializeTableDocument } from "@edgeever/shared";
 import { createMemoRecord, getMemoDetail, normalizeSearchTimeBound, updateMemoRecord } from "./memo-service.ts";
 import { companionWorkspaceCursor, proposeCompanionToolAction } from "./companion-tool-actions.ts";
 import { getCompanionAction, applyCompanionAction, dismissCompanionAction } from "./companion-actions.ts";
 import { COMPANION_MCP_TOOLS, validateCompanionTool } from "./companion-tool-catalog.ts";
 import { MCP_TOOLS } from "./mcp-tools.ts";
 import { companionToolDefinitions, createCompanionTools, explicitDiagramKind, requestsInfographic, resolveWorkspaceInboxId } from "./companion-agent-tools.ts";
-import { companionExecutionReceipts } from "./companion-runtime.ts";
+import { companionExecutionReceipts } from "./test-support/companion-model.ts";
 
 const databases = [];
 afterEach(() => databases.splice(0).forEach(db => db.close()));
@@ -48,8 +48,67 @@ async function setup() {
 }
 
 describe("shared companion MCP adapter", () => {
+  test("finds, previews and deletes an empty notebook subtree through the companion", async () => {
+    const f = await setup();
+    f.sqlite.query("INSERT INTO notebooks(id, workspace_id, parent_id, name) VALUES ('child', ?, 'target', 'Empty child')").run(scope.workspaceId);
+    const tools = createCompanionTools({ ...f, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
+    expect(companionToolDefinitions(f.input).find(tool => tool.name === "delete_notebook")).toBeTruthy();
+    const found = await tools.find_notebooks.execute({ name: "target", exact: true });
+    expect(found.notebooks).toHaveLength(1);
+    const args = { notebookId: found.notebooks[0].id };
+    expect(await tools.delete_notebook.execute({ ...args, dryRun: true })).toMatchObject({ dryRun: true, deleted: false, notebookCount: 2 });
+    expect(f.sqlite.query("SELECT is_deleted FROM notebooks WHERE id = 'target'").get().is_deleted).toBe(0);
+    const result = await tools.delete_notebook.execute(args);
+    expect(result).toMatchObject({ applied: true, deleted: true, dryRun: false, notebookCount: 2 });
+    expect(result.notebookIds.sort()).toEqual(["child", "target"]);
+    expect((await tools.find_notebooks.execute({ name: "target", exact: true })).notebooks).toEqual([]);
+    expect(await tools.delete_notebook.execute(args)).toMatchObject({ applied: true, deleted: true, notebookCount: 0 });
+    expect(f.sqlite.query("SELECT COUNT(*) AS n FROM audit_events WHERE action = 'notebook.delete'").get().n).toBe(1);
+    expect(f.sqlite.query("SELECT COUNT(*) AS n FROM companion_actions").get().n).toBe(0);
+    expect((await getMemoDetail(f.db, scope.workspaceId, f.notes[0].id)).contentMarkdown).toBe("One original content");
+  });
+
+  test("companion notebook deletion preserves nonempty subtrees and protects the inbox", async () => {
+    const f = await setup();
+    f.sqlite.query("UPDATE notebooks SET parent_id = 'target' WHERE id = 'ideas'").run();
+    f.sqlite.query("INSERT INTO notebooks(id, workspace_id, name, slug) VALUES (?, ?, 'Inbox', 'inbox')").run(`${scope.workspaceId}_inbox`, scope.workspaceId);
+    const tools = createCompanionTools({ ...f, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
+    for (const dryRun of [true, false]) {
+      await expect(tools.delete_notebook.execute({ notebookId: "target", dryRun })).rejects.toMatchObject({ code: "notebook_not_empty" });
+    }
+    const inboxTools = createCompanionTools({ ...f, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
+    await expect(inboxTools.delete_notebook.execute({ notebookId: `${scope.workspaceId}_inbox` })).rejects.toMatchObject({ code: "bad_request" });
+    expect(f.sqlite.query("SELECT COUNT(*) AS n FROM notebooks WHERE is_deleted = 1").get().n).toBe(0);
+    expect(f.sqlite.query("SELECT COUNT(*) AS n FROM audit_events WHERE action = 'notebook.delete'").get().n).toBe(0);
+    expect((await getMemoDetail(f.db, scope.workspaceId, f.notes[0].id)).isDeleted).toBe(false);
+  });
+
+  test("poster CRUD reuses scoped queries, guarded edits, recoverable trash and restoration", async () => {
+    const f = await setup();
+    const tools = createCompanionTools({ ...f, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
+    const created = await tools.create_poster_memo.execute({ notebookId: "ideas", title: "Energy poster", heading: "Protect your energy", layout: "list", sections: [{ heading: "Rest", body: "Make time to recharge" }, { heading: "Focus", body: "Keep space for important work" }]  });
+    const listed = await tools.list_memos.execute({ poster: true });
+    expect(listed.memos.map(memo => memo.id)).toContain(created.id);
+    expect(listed.memos.find(memo => memo.id === created.id).poster).toBe(true);
+    expect(await tools.get_memo.execute({ memoId: created.id })).toMatchObject({ poster: true, message: expect.stringContaining("get_poster") });
+    await tools.get_poster.execute({ memoId: created.id });
+    const poster = await getMemoDetail(f.db, scope.workspaceId, created.id);
+    expect(parsePosterDocument(poster.contentMarkdown).elements.find(element => element.id === "section-1-body").text).toBe("Make time to recharge");
+    const heading = parsePosterDocument(poster.contentMarkdown).elements.find(element => element.role === "title");
+    await tools.update_poster.execute({ memoId: created.id, expectedRevision: poster.revision, edits: [{ id: heading.id, patch: { text: "Focus on what matters" } }] });
+    expect(parsePosterDocument((await getMemoDetail(f.db, scope.workspaceId, created.id)).contentMarkdown).copy.title).toBe("Focus on what matters");
+    await tools.trash_memos.execute({ memoIds: [created.id], dryRun: true });
+    expect(await getMemoDetail(f.db, scope.workspaceId, created.id)).not.toBeNull();
+    await tools.trash_memos.execute({ memoIds: [created.id] });
+    expect(await getMemoDetail(f.db, scope.workspaceId, created.id)).toBeNull();
+    expect((await tools.search_memos.execute({ poster: true })).memos.map(memo => memo.id)).not.toContain(created.id);
+    const trashed = await tools.list_memos.execute({ poster: true, includeDeleted: true });
+    expect(trashed.memos.map(memo => memo.id)).toContain(created.id);
+    await tools.restore_memos.execute({ memoIds: [created.id] });
+    expect(parsePosterDocument((await getMemoDetail(f.db, scope.workspaceId, created.id)).contentMarkdown).copy.title).toBe("Focus on what matters");
+  });
   test("reuses the exact reviewed MCP definitions, with no administration or upload tools", () => {
-    expect(COMPANION_MCP_TOOLS).toHaveLength(47);
+    expect(COMPANION_MCP_TOOLS).toHaveLength(56);
     for (const definition of COMPANION_MCP_TOOLS) expect(MCP_TOOLS.includes(definition)).toBe(true);
     for (const name of ["upload_memo_image", "upload_memo_attachment", "empty_trash", "share_memo"]) {
       expect(() => validateCompanionTool(name, {})).toThrow();
@@ -61,7 +120,7 @@ describe("shared companion MCP adapter", () => {
   });
 
   const operations = [
-    ["create_memo", n => ({ notebookId: "ideas", title: "New", contentMarkdown: "Exact new body" })],
+    ["create_memo", () => ({ notebookId: "ideas", title: "New", contentMarkdown: "Exact new body" })],
     ["update_memo", n => ({ memoId: n[0].id, title: "Changed", contentMarkdown: "Exact replacement" })],
     ["merge_memos", n => ({ memoIds: n.map(note => note.id), title: "Merged", notebookId: "target" })],
     ["move_memos", n => ({ memoIds: [n[0].id], notebookId: "target" })],
@@ -115,12 +174,25 @@ describe("shared companion MCP adapter", () => {
   test("read and dry-run tools reuse MCP without writing or requiring a proposal", async () => {
     const f = await setup();
     const tools = createCompanionTools({ ...f, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
-    expect(Object.keys(tools)).toHaveLength(49);
+    expect(Object.keys(tools)).toHaveLength(58);
     expect(await tools.get_memo.execute({ memoId: f.notes[0].id })).toMatchObject({ content: "One original content" });
     expect(await tools.trash_memos.execute({ memoIds: [f.notes[0].id], dryRun: true })).toMatchObject({ dryRun: true });
     expect(await getMemoDetail(f.db, scope.workspaceId, f.notes[0].id)).not.toBeNull();
     expect(f.sqlite.query("SELECT COUNT(*) AS n FROM companion_actions").get().n).toBe(0);
     expect(createCompanionTools({ ...f, scope, input: { ...f.input, allowNotes: false } })).toEqual({});
+  });
+  test("poster changes use the shared agent execution path with read and revision guards", async () => {
+    const f = await setup();
+    const created = await createMemoRecord(f.db, scope.workspaceId, { notebookId: "ideas", title: "Poster", contentMarkdown: serializePosterDocument(createPosterDocument("Hello")), tags: [] }, actor, "owner");
+    const tools = createCompanionTools({ ...f, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
+    await expect(tools.update_poster.execute({ memoId: created.id, expectedRevision: created.revision, background: "#16A06E" })).rejects.toMatchObject({ code: "companion_action_unread" });
+    await tools.get_memo.execute({ memoId: created.id });
+    const read = await tools.get_poster.execute({ memoId: created.id });
+    expect(read.poster.elements.length).toBeGreaterThan(0);
+    const updated = await tools.update_poster.execute({ memoId: created.id, expectedRevision: read.memo.revision, background: "#16A06E" });
+    expect(updated).toMatchObject({ applied: true, id: created.id });
+    expect(parsePosterDocument((await getMemoDetail(f.db, scope.workspaceId, created.id)).contentMarkdown).background).toBe("#16A06E");
+    expect(f.sqlite.query("SELECT COUNT(*) AS n FROM companion_actions").get().n).toBe(0);
   });
   test("read-only note access keeps MCP reads and omits write tools", async () => {
     const f = await setup();
@@ -134,7 +206,11 @@ describe("shared companion MCP adapter", () => {
     expect(tools.create_diagram_memo).toBeUndefined();
     expect(tools.update_diagram).toBeUndefined();
     expect(tools.get_diagram).toBeTruthy();
+    expect(tools.get_poster).toBeTruthy();
+    expect(tools.update_poster).toBeUndefined();
     expect(tools.update_memo).toBeUndefined();
+    expect(tools.delete_notebook).toBeUndefined();
+    expect(companionToolDefinitions({ ...f.input, allowWrites: false }).some(tool => tool.name === "delete_notebook")).toBe(false);
     expect(tools.merge_memos).toBeUndefined();
     expect(tools.list_note_templates).toBeTruthy();
     expect(tools.get_ai_instruction).toBeTruthy();
@@ -321,6 +397,78 @@ describe("shared companion MCP adapter", () => {
     expect(diagram.edges).toMatchObject([{ source: "web", target: "api", kind: "request" }]);
     expect(diagram.edges[0].id).toBeTruthy();
   });
+  test("a new mind map request cannot read the open diagram", async () => {
+    const f = await setup();
+    const creator = createCompanionTools({ ...f, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
+    const created = await creator.create_diagram_memo.execute({
+      notebookId: "ideas",
+      title: "大模型蒸馏流程图",
+      kind: "flowchart",
+      nodes: [
+        { id: "teacher", label: "准备教师模型", type: "process" },
+        { id: "student", label: "训练学生模型", type: "process" },
+      ],
+      edges: [{ source: "teacher", target: "student" }],
+    });
+    const request = {
+      ...f.input,
+      message: "帮我生成一个AI大模型的思维导图。",
+      focus: { memoId: created.id, title: "大模型蒸馏流程图", diagramKind: "flowchart" },
+    };
+    const tools = createCompanionTools({ ...f, input: request, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
+    const blockedDiagram = await tools.get_diagram.execute({ memoId: created.id });
+    expect(blockedDiagram).toMatchObject({ error: expect.stringContaining("did not refer to the open note") });
+    expect(blockedDiagram.diagram).toBeUndefined();
+    const blockedMemo = await tools.get_memo.execute({ memoId: created.id });
+    expect(blockedMemo).toMatchObject({ error: expect.stringContaining("did not refer to the open note") });
+    expect(blockedMemo.diagram).toBeUndefined();
+
+    const referred = createCompanionTools({
+      ...f,
+      input: { ...request, message: "根据这篇生成思维导图" },
+      scope,
+      signal: new AbortController().signal,
+      assertActive: async () => {},
+      sources: [],
+    });
+    expect(await referred.get_diagram.execute({ memoId: created.id })).toMatchObject({
+      memo: { id: created.id }, diagram: { kind: "flowchart" },
+    });
+
+    const edit = createCompanionTools({
+      ...f,
+      input: { ...request, message: "加一个评估节点" },
+      scope,
+      signal: new AbortController().signal,
+      assertActive: async () => {},
+      sources: [],
+    });
+    expect(await edit.get_diagram.execute({ memoId: created.id })).toMatchObject({ diagram: { kind: "flowchart" } });
+
+    const attached = createCompanionTools({
+      ...f,
+      input: { ...request, focus: { ...request.focus, contentMarkdown: "教师模型、软标签、学生模型。" } },
+      scope,
+      signal: new AbortController().signal,
+      assertActive: async () => {},
+      sources: [],
+    });
+    expect(await attached.get_diagram.execute({ memoId: created.id })).toMatchObject({ diagram: { kind: "flowchart" } });
+
+    for (const message of ["生成思维导图", "整理成思维导图", "把这个做成思维导图"]) {
+      const fromOpenNote = createCompanionTools({
+        ...f,
+        input: { ...request, message },
+        scope,
+        signal: new AbortController().signal,
+        assertActive: async () => {},
+        sources: [],
+      });
+      expect(await fromOpenNote.get_diagram.execute({ memoId: created.id }), message).toMatchObject({
+        diagram: { kind: "flowchart" },
+      });
+    }
+  });
   test("an explicit diagram type narrows the Agent schema and rejects a mismatched write", async () => {
     expect(explicitDiagramKind("帮我生成一个架构图笔记作为说明。")).toBe("architecture");
     expect(explicitDiagramKind("Create a flow chart note.")).toBe("flowchart");
@@ -335,7 +483,7 @@ describe("shared companion MCP adapter", () => {
     expect(definition.description).toContain("use exactly that kind");
     expect(definition.description).toContain("等待分类");
     const plain = companionToolDefinitions(f.input);
-    for (const name of ["create_memo", "create_diagram_memo", "create_infographic_memo", "use_note_template"]) {
+    for (const name of ["create_memo", "create_diagram_memo", "create_infographic_memo", "create_poster_memo", "use_note_template"]) {
       const tool = plain.find(item => item.name === name);
       expect(tool.inputSchema.required ?? []).not.toContain("notebookId");
       expect(tool.description).toContain("等待分类");
@@ -362,6 +510,10 @@ describe("shared companion MCP adapter", () => {
     const tools = createCompanionTools({ ...f, scope, signal: new AbortController().signal, assertActive: async () => {}, sources: [] });
     const note = await tools.create_memo.execute({ title: "Inbox note", contentMarkdown: "Saved without asking" });
     expect(note.memo.notebookId).toBe(inboxId);
+    const poster = await tools.create_poster_memo.execute({ title: "精力管理", heading: "精力管理大于时间管理", subtitle: "把精力留给重要的事" });
+    expect(poster).toMatchObject({ applied: true, notebookId: inboxId, poster: true });
+    const savedPoster = await getMemoDetail(f.db, scope.workspaceId, poster.id);
+    expect(parsePosterDocument(savedPoster.contentMarkdown).copy.title).toBe("精力管理大于时间管理");
     const diagram = await tools.create_diagram_memo.execute({
       title: "模型蒸馏",
       kind: "flowchart",

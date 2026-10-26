@@ -6,7 +6,7 @@ import type {
 import { resolveSupportedLocale } from "./i18n/locales";
 
 export type AiPromptSeedKey = Exclude<AiAction, "custom">;
-export type AiPromptSeedLocale = "zh-CN" | "en-US" | "ja";
+export type AiPromptSeedLocale = "zh-CN" | "en-US" | "ja" | "pl" | "ru";
 
 export type AiPromptSeedTranslation = {
   name: string;
@@ -28,10 +28,12 @@ const seed = (
   zhCN: AiPromptSeedTranslation,
   enUS: AiPromptSeedTranslation,
   ja: AiPromptSeedTranslation,
+  pl: AiPromptSeedTranslation,
+  ru: AiPromptSeedTranslation,
 ): AiPromptSeed => ({
   ...metadata,
   ...zhCN,
-  translations: { "zh-CN": zhCN, "en-US": enUS, ja },
+  translations: { "zh-CN": zhCN, "en-US": enUS, ja, pl, ru },
 });
 
 export const normalizeAiPromptSeedLocale = (locale: string | null | undefined): AiPromptSeedLocale =>
@@ -97,6 +99,30 @@ export const DEFAULT_AI_PROMPT_SEEDS: readonly AiPromptSeed[] = [
         "ノートの言語を保ち、Markdown の要約だけを返してください。",
       ].join(""),
     },
+    {
+      name: "Podsumuj",
+      description: "Streść notatkę do tematu, wniosków i działań do podjęcia",
+      instruction: [
+        "Utwórz faktycznie skondensowane podsumowanie notatki, zamiast ją przepisywać, parafrazować zdanie po zdaniu lub powtarzać. ",
+        "Wskaż główny temat, najważniejsze tezy, kluczowe wnioski i działania do podjęcia. ",
+        "Pomiń powtórzenia, ozdobniki retoryczne, przykłady, cytaty i drobne szczegóły, chyba że są niezbędne do zrozumienia kluczowego wniosku. ",
+        "W przypadku obszernej notatki celuj w około 20–30% długości oryginału i użyj 3–7 zwięzłych punktów listy Markdown; w przypadku krótkiej notatki wystarczą 1–3 zwięzłe zdania. ",
+        "Nie przytaczaj dosłownie długich fragmentów i nie dodawaj faktów, których nie ma w oryginale. ",
+        "Zachowaj język notatki i zwróć wyłącznie podsumowanie w formacie Markdown.",
+      ].join(""),
+    },
+    {
+      name: "Кратко",
+      description: "Сжать заметку до темы, выводов и действий",
+      instruction: [
+        "Сделайте настоящее краткое изложение заметки, а не пересказ предложения за предложением и не повтор текста. ",
+        "Выделите главную тему, основные мысли, ключевые выводы и действия. ",
+        "Опустите повторы, риторику, примеры, цитаты и второстепенные детали, если без них вывод всё равно понятен. ",
+        "Для длинной заметки ориентируйтесь примерно на 20–30% исходного объёма и 3–7 коротких пунктов Markdown; для короткой хватит 1–3 предложений. ",
+        "Не копируйте длинные фрагменты дословно и не добавляйте факты, которых нет в тексте. ",
+        "Сохраните язык заметки и верните только краткое изложение в Markdown.",
+      ].join(""),
+    },
   ),
   seed(
     { key: "translate", action: "translate", parameterKind: "target-language", resultMode: "both" },
@@ -114,6 +140,16 @@ export const DEFAULT_AI_PROMPT_SEEDS: readonly AiPromptSeed[] = [
       name: "翻訳する",
       description: "指定した言語へ翻訳し、構造と書式を残す",
       instruction: "ノート全体を、ユーザーが指定した目標言語へ翻訳してください。意味、Markdown の構造、リンク、コードブロックは残してください。解説は付けず、訳文だけを返してください。",
+    },
+    {
+      name: "Przetłumacz",
+      description: "Przetłumacz na wybrany język, zachowując formatowanie",
+      instruction: "Przetłumacz całą notatkę na język docelowy wskazany przez użytkownika. Zachowaj jej znaczenie, strukturę Markdown, linki i bloki kodu. Zwróć wyłącznie przetłumaczoną notatkę, bez komentarzy.",
+    },
+    {
+      name: "Перевести",
+      description: "Перевести на выбранный язык, сохранив оформление",
+      instruction: "Переведите заметку целиком на язык, который указал пользователь. Сохраните смысл, структуру Markdown, ссылки и блоки кода. Верните только перевод, без комментариев.",
     },
   ),
   seed(
@@ -133,6 +169,16 @@ export const DEFAULT_AI_PROMPT_SEEDS: readonly AiPromptSeed[] = [
       description: "誤字と文法を直し、わかりやすさと流れを上げる",
       instruction: "内容を整えてください。誤字、文法、句読点を直し、語彙、文の形、明瞭さ、流れを改善します。意味を変えたり、意図的に短くしたりしないでください。元の言語と有用な Markdown 書式は残してください。整えた本文だけを返してください。",
     },
+    {
+      name: "Popraw styl",
+      description: "Popraw język oraz zwiększ przejrzystość i płynność tekstu",
+      instruction: "Dopracuj treść: popraw pisownię, gramatykę i interpunkcję oraz ulepsz dobór słów, budowę zdań, przejrzystość i płynność. Nie zmieniaj jej znaczenia ani celowo jej nie skracaj. Zachowaj jej język i przydatne formatowanie Markdown. Zwróć wyłącznie dopracowaną treść.",
+    },
+    {
+      name: "Улучшить текст",
+      description: "Исправить язык и сделать текст яснее и плавнее",
+      instruction: "Улучшите текст: исправьте орфографию, грамматику и пунктуацию, подберите слова, структуру фраз, ясность и плавность. Не меняйте смысл и не сокращайте текст нарочно. Сохраните язык и полезное оформление Markdown. Верните только улучшенный текст.",
+    },
   ),
   seed(
     { key: "make-shorter", action: "make-shorter", parameterKind: "none", resultMode: "both" },
@@ -150,6 +196,16 @@ export const DEFAULT_AI_PROMPT_SEEDS: readonly AiPromptSeed[] = [
       name: "簡潔にする",
       description: "重複と冗長さを削り、短くはっきり書く",
       instruction: "内容を簡潔にしてください。繰り返し、空疎な言い回し、不要な修飾を削り、まとめられる文はまとめて、短く、はっきり、力強くしてください。重要な事実、主張、元の意味はすべて残し、新しい情報は足さないでください。元の言語と有用な Markdown 書式は残してください。簡潔にした本文だけを返してください。",
+    },
+    {
+      name: "Skróć i uprość",
+      description: "Usuń powtórzenia i napisz tekst zwięźle i konkretnie",
+      instruction: "Dopracuj treść, usuwając powtórzenia, puste frazy i zbędne określenia oraz łącząc zdania tam, gdzie to pomaga. Spraw, by tekst był zwięzły, jasny i konkretny, zachowując każdy kluczowy fakt, tezę i pierwotne znaczenie. Nie dodawaj nowych informacji. Zachowaj jej język i przydatne formatowanie Markdown. Zwróć wyłącznie dopracowaną treść.",
+    },
+    {
+      name: "Короче и яснее",
+      description: "Убрать повторы и написать короче и прямее",
+      instruction: "Сократите текст: уберите повторы, пустые фразы и лишние определения, объедините предложения, где это уместно. Сделайте его коротким, ясным и прямым, сохранив каждый важный факт, мысль и исходный смысл. Не добавляйте новой информации. Сохраните язык и полезное оформление Markdown. Верните только сокращённый текст.",
     },
   ),
   seed(
@@ -169,6 +225,16 @@ export const DEFAULT_AI_PROMPT_SEEDS: readonly AiPromptSeed[] = [
       description: "実行できる作業を見つけ、チェックリストにする",
       instruction: "ノートから明示または含意された実行可能なタスクを抜き出し、Markdown のタスクリスト（- [ ]）で出力してください。ノートの言語を保ち、タスクを捏造しないでください。実行できることがなければ、ノートの言語で短くそう書いてください。",
     },
+    {
+      name: "Wyodrębnij zadania",
+      description: "Znajdź działania do wykonania i utwórz listę zadań",
+      instruction: "Wyodrębnij z notatki jawne lub domniemane zadania do wykonania jako listę zadań Markdown z użyciem '- [ ]'. Zachowaj jej język i nie wymyślaj zadań. Jeśli nie ma zadań do wykonania, napisz to krótko w języku notatki.",
+    },
+    {
+      name: "Выделить задачи",
+      description: "Найти дела и составить список задач",
+      instruction: "Выделите из заметки явные и подразумеваемые дела и оформите их списком задач Markdown через '- [ ]'. Сохраните язык заметки и не придумывайте задачи. Если дел нет, коротко напишите об этом на языке заметки.",
+    },
   ),
   seed(
     { key: "continue-writing", action: "continue-writing", parameterKind: "none", resultMode: "append" },
@@ -186,6 +252,16 @@ export const DEFAULT_AI_PROMPT_SEEDS: readonly AiPromptSeed[] = [
       name: "続きを書く",
       description: "ノートの末尾から自然に書き継ぐ",
       instruction: "ノートの終わりから自然に書き継いでください。原文は繰り返さず、新しい続きだけを返してください。元の言語と Markdown の調子を保ってください。",
+    },
+    {
+      name: "Pisz dalej",
+      description: "Kontynuuj naturalnie od końca notatki",
+      instruction: "Kontynuuj pisanie naturalnie od miejsca, w którym kończy się notatka. Zwróć wyłącznie nową kontynuację, bez oryginalnej treści. Zachowaj jej język i styl Markdown.",
+    },
+    {
+      name: "Продолжить текст",
+      description: "Продолжить естественно с конца заметки",
+      instruction: "Продолжите текст естественно с того места, где заметка заканчивается. Верните только продолжение, без исходного текста. Сохраните язык и стиль Markdown.",
     },
   ),
 ];

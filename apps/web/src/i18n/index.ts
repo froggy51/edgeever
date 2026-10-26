@@ -27,20 +27,36 @@ export const resources = {
   "en-US": { translation: enUS },
 } as const;
 
+type OptionalLocale = Exclude<SupportedLocale, keyof typeof resources>;
+
+const isOptionalLocale = (locale: SupportedLocale): locale is OptionalLocale =>
+  locale === "ja" || locale === "pl" || locale === "ru";
+
+const loadOptionalCatalog = async (locale: OptionalLocale) => {
+  if (locale === "ja") {
+    return (await import("./resources/ja")).ja;
+  }
+  if (locale === "pl") {
+    return (await import("./resources/pl")).pl;
+  }
+  return (await import("./resources/ru")).ru;
+};
+
 const ensureLocaleCatalog = async (locale: SupportedLocale) => {
-  if (locale !== "ja" || i18n.hasResourceBundle("ja", "translation")) {
+  if (!isOptionalLocale(locale) || i18n.hasResourceBundle(locale, "translation")) {
     return;
   }
 
-  const { ja } = await import("./resources/ja");
-  i18n.addResourceBundle("ja", "translation", ja, true, true);
+  i18n.addResourceBundle(locale, "translation", await loadOptionalCatalog(locale), true, true);
 };
 
 void i18n.use(initReactI18next).init({
   resources,
-  lng: getInitialLocale() === "ja" ? "en-US" : getInitialLocale(),
+  lng: isOptionalLocale(getInitialLocale()) ? "en-US" : getInitialLocale(),
   fallbackLng: {
     ja: ["en-US"],
+    pl: ["en-US"],
+    ru: ["en-US"],
     default: [defaultLocale],
   },
   supportedLngs: supportedLocales,
@@ -63,7 +79,7 @@ document.documentElement.lang = i18n.resolvedLanguage ?? i18n.language ?? defaul
 
 export const bootstrapI18n = async () => {
   const locale = getInitialLocale();
-  if (locale !== "ja") {
+  if (!isOptionalLocale(locale)) {
     return;
   }
 

@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
-import { ArrowUp, PanelRightClose, Sparkles, Undo2 } from "lucide-react";
-import type { MouseEvent } from "react";
+import { ArrowUp, Sparkles, Undo2 } from "lucide-react";
+import { useState, type MouseEvent } from "react";
 import type { InfographicConversationTurn } from "@edgeever/shared";
 import { Button } from "@/components/ui/button";
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationScrollButton } from "@/components/ai-elements/conversation";
@@ -15,6 +15,7 @@ import {
   usePromptInputController,
 } from "@/components/ai-elements/prompt-input";
 import { cn } from "@/lib/utils";
+import { infographicTurnSessionId, resolveInfographicSessionId } from "@/lib/infographic-sessions";
 import { SidebarAgentModeStatus } from "./SidebarAgentModeStatus";
 import { memoIdFromSidebarLinkEvent, rewriteSidebarNoteLinks, sidebarNoteLinkAllowedTags, sidebarNoteLinkComponents } from "./sidebar-note-links";
 
@@ -42,12 +43,15 @@ export type InfographicSidebarController = {
   readOnly: boolean;
   canUndo: boolean;
   hasGraphic: boolean;
+  activeSessionId: string | null;
   onSubmit: (prompt: string) => Promise<void>;
   onUndo: () => void;
   onStop: () => void;
+  onSelectSession: (sessionId: string) => void;
+  onCreateSession: () => void;
 };
 
-function InfographicSidebarComposer({ session }: { session: InfographicSidebarController }) {
+function InfographicSidebarComposer({ session, selectionPending, onPendingChange }: { session: InfographicSidebarController; selectionPending: boolean; onPendingChange: (pending: boolean) => void }) {
   const { t } = useTranslation();
   const { textInput } = usePromptInputController();
   const draft = textInput.value.trim();
@@ -56,39 +60,42 @@ function InfographicSidebarComposer({ session }: { session: InfographicSidebarCo
       inputGroupClassName="rounded-[22px] border-slate-200 bg-card shadow-sm has-[[data-slot=input-group-control]:focus-visible]:ring-0"
       onSubmit={async ({ text }) => {
         const raw = text.trim().slice(0, 1000);
-        if (!raw || session.generating) throw new Error("empty");
+        if (!raw || session.generating || selectionPending) throw new Error("empty");
         await session.onSubmit(raw);
       }}
     >
       <PromptInputTextarea
         className="min-h-20 px-4 pb-2 pt-4 text-[13px] leading-5 md:text-[13px]"
-        disabled={session.generating}
+        disabled={session.generating || selectionPending}
         maxLength={1000}
         placeholder={t(session.hasGraphic ? "infographic.refinePrompt" : "infographic.prompt")}
       />
       <PromptInputFooter className="px-2.5 pb-2.5 pt-0">
-        <PromptInputTools>
+        <PromptInputTools className="shrink-0">
           {session.canUndo ? (
-            <Button type="button" size="sm" variant="outline" disabled={session.generating} onClick={session.onUndo}>
+            <Button type="button" size="sm" variant="outline" disabled={session.generating || selectionPending} onClick={session.onUndo}>
               <Undo2 className="mr-1 h-3.5 w-3.5" />
               {t("infographic.undoGeneration")}
             </Button>
           ) : null}
         </PromptInputTools>
-        {session.generating ? (
-          <Button type="button" size="sm" variant="outline" onClick={session.onStop}>
-            {t("aiAssistant.sidebar.stop")}
-          </Button>
-        ) : (
-          <PromptInputSubmit
-            aria-label={t(session.hasGraphic ? "infographic.applyRefinement" : "infographic.generate")}
-            className="rounded-full border-slate-900 bg-slate-900 text-slate-50 hover:border-slate-800 hover:bg-slate-800 disabled:border-slate-100 disabled:bg-slate-100 disabled:text-slate-300"
-            disabled={!draft}
-            variant="solid"
-          >
-            <ArrowUp className="size-4" />
-          </PromptInputSubmit>
-        )}
+        <div className="ml-auto flex min-w-0 flex-1 items-center justify-end gap-1">
+          <SidebarAgentModeStatus disabled={session.generating} onPendingChange={onPendingChange} />
+          {session.generating ? (
+            <Button type="button" size="sm" variant="outline" onClick={session.onStop}>
+              {t("aiAssistant.sidebar.stop")}
+            </Button>
+          ) : (
+            <PromptInputSubmit
+              aria-label={t(session.hasGraphic ? "infographic.applyRefinement" : "infographic.generate")}
+              className="rounded-full border-slate-900 bg-slate-900 text-slate-50 hover:border-slate-800 hover:bg-slate-800 disabled:border-slate-100 disabled:bg-slate-100 disabled:text-slate-300"
+              disabled={!draft || selectionPending}
+              variant="solid"
+            >
+              <ArrowUp className="size-4" />
+            </PromptInputSubmit>
+          )}
+        </div>
       </PromptInputFooter>
     </PromptInput>
   );
@@ -109,17 +116,15 @@ function InfographicReply({ children, isAnimating }: { children: string; isAnima
 
 export function InfographicSidebarSession({
   session,
-  noteTitle,
-  onOpenChange,
   onOpenNote,
 }: {
   session: InfographicSidebarController;
-  noteTitle?: string;
-  onOpenChange: (open: boolean) => void;
   onOpenNote?: (memoId: string, notebookId: string) => void;
 }) {
   const { t, i18n } = useTranslation();
-  const title = noteTitle?.trim() || t("infographic.name");
+  const [selectionPending, setSelectionPending] = useState(false);
+  const viewingId = resolveInfographicSessionId(session.turns, session.activeSessionId);
+  const visibleTurns = session.turns.filter((turn) => infographicTurnSessionId(turn) === viewingId);
   const openLinkedNote = (event: MouseEvent<HTMLElement>) => {
     const linkedId = memoIdFromSidebarLinkEvent(event);
     if (!linkedId || !onOpenNote) return;
@@ -133,34 +138,17 @@ export function InfographicSidebarSession({
         : t(turn.kind === "generated" ? "infographic.historyGenerated" : "infographic.historyRefined", { title: turn.resultTitle || t("infographic.name") }));
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col bg-card" data-infographic-ai-sidebar="">
-      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-200 px-2">
-        <span className="flex min-w-0 flex-1 items-center gap-1.5 px-1.5 text-[13px] text-slate-800">
-          <Sparkles className="size-3.5 shrink-0" aria-hidden="true" />
-          <span className="truncate">{title}</span>
-        </span>
-        <SidebarAgentModeStatus />
-        <Button
-          type="button"
-          size="icon-sm"
-          variant="ghost"
-          title={t("aiAssistant.sidebar.close")}
-          aria-label={t("aiAssistant.sidebar.close")}
-          onClick={() => onOpenChange(false)}
-        >
-          <PanelRightClose className="h-4 w-4" />
-        </Button>
-      </div>
-      <Conversation className="min-h-0 flex-1" aria-label={t("infographic.historyTitle")}>
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-card" data-infographic-ai-sidebar="">
+      <Conversation key={viewingId} className="min-h-0 flex-1" aria-label={t("infographic.historyTitle")}>
         <ConversationContent className={threadClassName} onClick={openLinkedNote}>
-          {!session.turns.length && !session.activeTurn ? (
+          {!visibleTurns.length && !session.activeTurn ? (
             <ConversationEmptyState
               icon={<Sparkles className="h-6 w-6" />}
               title={t(session.hasGraphic ? "infographic.refine" : "infographic.describe")}
               description={t(session.hasGraphic ? "infographic.refinePrompt" : "infographic.prompt")}
             />
           ) : null}
-          {session.turns.map((turn) => (
+          {visibleTurns.map((turn) => (
             <div key={turn.id} data-infographic-turn={turn.id} className="space-y-2">
               <Message from="user">
                 <MessageContent className={userMessageClassName}>{turn.prompt}</MessageContent>
@@ -199,7 +187,7 @@ export function InfographicSidebarSession({
       {!session.readOnly ? (
         <div className="shrink-0 p-3">
           <PromptInputProvider>
-            <InfographicSidebarComposer session={session} />
+            <InfographicSidebarComposer session={session} selectionPending={selectionPending} onPendingChange={setSelectionPending} />
           </PromptInputProvider>
         </div>
       ) : null}

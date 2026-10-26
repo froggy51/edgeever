@@ -8,6 +8,7 @@ import {
   mergeMemoDocs,
   getDiagramSummary,
   getInfographicSummary,
+  getPosterSummary,
   getTableSummary,
   getNotebookDescendantIds,
   resolveMemoContentDoc,
@@ -80,6 +81,7 @@ const toSummary = (memo: MemoDetail): MemoSummary => ({
   excerpt: memo.excerpt,
   ...getDiagramSummary(memo.contentMarkdown),
   ...getInfographicSummary(memo.contentMarkdown),
+  ...getPosterSummary(memo.contentMarkdown),
   ...getTableSummary(memo.contentMarkdown),
   tags: memo.tags,
   isPinned: memo.isPinned,
@@ -262,7 +264,11 @@ export const listLocalMemos = async (scope: string, params: LocalMemoListParams)
   memos.sort((left, right) => {
     if (params.trash) return (right.deletedAt ?? "").localeCompare(left.deletedAt ?? "") || right.id.localeCompare(left.id);
     if (params.sort === "created-desc") return right.createdAt.localeCompare(left.createdAt) || right.id.localeCompare(left.id);
-    if (params.sort === "title-asc") return (left.title || left.excerpt).localeCompare(right.title || right.excerpt, "zh-CN") || right.updatedAt.localeCompare(left.updatedAt);
+    if (params.sort === "title-asc" || params.sort === "title-desc") {
+      const titleCompare = (left.title || left.excerpt).localeCompare(right.title || right.excerpt, "zh-CN");
+      if (titleCompare !== 0) return params.sort === "title-desc" ? -titleCompare : titleCompare;
+      return right.updatedAt.localeCompare(left.updatedAt);
+    }
     return Number(right.isPinned) - Number(left.isPinned) || right.updatedAt.localeCompare(left.updatedAt) || right.id.localeCompare(left.id);
   });
 

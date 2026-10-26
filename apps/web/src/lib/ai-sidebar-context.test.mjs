@@ -20,6 +20,8 @@ describe("AI sidebar note context", () => {
     expect(localContext).toContain("Title (data): QQ 音乐等级");
     expect(localContext).toContain("get_memo");
     expect(localContext).toContain("translate into Simplified Chinese without asking");
+    expect(localContext).toContain("write inline LaTeX as \\(...\\)");
+    expect(localContext).toContain("Do not use $...$ for inline math");
     expect(localContext).not.toContain(note.contentMarkdown);
   });
 
@@ -39,6 +41,19 @@ describe("AI sidebar note context", () => {
     expect(sidebarCompanionFocus(selected, false)).toEqual({ memoId: "note-1", title: "QQ 音乐等级", selectionMarkdown: "需要解释的句子" });
     expect(sidebarLocalContextText(selected, false, conversation())).toContain("需要解释的句子");
     expect(sidebarLocalContextText(selected, false, conversation())).not.toContain(note.contentMarkdown);
+  });
+
+  test("a new diagram request leaves the open note out of local agent context", () => {
+    const message = "帮我生成一个AI大模型的思维导图。";
+    const localContext = sidebarLocalContextText(note, false, conversation(message));
+    expect(localContext).toContain("did not refer to the note open in the editor");
+    expect(localContext).not.toContain("note-1");
+    expect(localContext).not.toContain(note.noteTitle);
+    expect(localContext).not.toContain(note.contentMarkdown);
+    expect(sidebarLocalContextText(note, false, conversation("根据这篇生成思维导图"))).toContain("ID: note-1");
+    expect(sidebarLocalContextText(note, false, conversation("生成思维导图"))).toContain("ID: note-1");
+    expect(sidebarLocalContextText(note, false, conversation("整理成思维导图"))).toContain(note.noteTitle);
+    expect(sidebarLocalContextText(note, true, conversation(message))).toContain(note.contentMarkdown);
   });
 
   test("switching notes sends only the newly open note identity", () => {
